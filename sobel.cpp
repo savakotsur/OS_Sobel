@@ -3,8 +3,11 @@
 #include <vector>
 #include <string>
 #include <cmath>
+#include <chrono>
+#include <thread>
 
 using namespace std;
+using namespace std::chrono;
 
 // Структура для хранения изображения
 struct Image {
@@ -55,9 +58,7 @@ Image loadPPM(const string& filename) {
 }
 
 // Функция для применения фильтра Собеля к изображению
-void applySobelFilter(Image& image) {
-    vector<vector<vector<int>>> result(image.height, vector<vector<int>>(image.width, vector<int>(3, 0)));
-    
+void applySobelFilter(const Image& image, Image& result, int startRow, int endRow) {
     // Ядро фильтра Собеля по оси X
     int kernelX[3][3] = {
         {-1, 0, 1},
@@ -73,7 +74,7 @@ void applySobelFilter(Image& image) {
     };
     
     // Применяем фильтр Собеля к каждому пикселю изображения
-    for (int i = 1; i < image.height - 1; ++i) {
+    for (int i = startRow; i < endRow; ++i) {
         for (int j = 1; j < image.width - 1; ++j) {
             int gx = 0, gy = 0;
             
@@ -92,14 +93,11 @@ void applySobelFilter(Image& image) {
             magnitude = min(255, max(0, magnitude));
             
             // Присваиваем магнитуду всем каналам пикселя
-            result[i][j][0] = magnitude;
-            result[i][j][1] = magnitude;
-            result[i][j][2] = magnitude;
+            result.data[i][j][0] = magnitude;
+            result.data[i][j][1] = magnitude;
+            result.data[i][j][2] = magnitude;
         }
     }
-    
-    // Обновляем данные изображения результатами фильтрации
-    image.data = result;
 }
 
 // Функция для сохранения изображения в файл формата PPM
@@ -121,30 +119,59 @@ void savePPM(const Image& image, const string& filename) {
             file.put(static_cast<char>(image.data[i][j][2])); // Синий канал
         }
     }
-    
-    cout << "Image saved to '" << filename << "'" << endl;
 }
 
-int main(int argc, char *argv[]) {
-    if (argc != 2) {
-        cerr << "Usage: " << argv[0] << " <filename>" << endl;
+int main(int argc, char* argv[]) {
+    if (argc < 3) {
+        cerr << "Usage: " << argv[0] << " <input_image.ppm> <num_threads>" << endl;
         return 1;
     }
-
+    
     string filename = argv[1];
+    int numThreads = stoi(argv[2]);
+    
+    // Загружаем изображение из файла
     Image image = loadPPM(filename);
     if (image.data.empty()) {
-           return 1;
+        return 1;
     }
-
+    
     cout << "Loaded image with width: " << image.width << ", height: " << image.height << endl;
     
-    // Применяем фильтр Собеля
-    applySobelFilter(image);
+    // Создаем изображение для результата
+    Image result = image;
+    
+    auto start = high_resolution_clock::now(); // Запускаем таймер
+    
+    if (numThreads == 1) {
+        // Однопоточное выполнение
+        applySobelFilter(image, result, 1, image.height - 1);
+    } else {
+        // Многопоточное выполнение
+        vector<thread> threads;
+        int rowsPerThread = image.height / numThreads;
+        
+        // Создаем и запускаем потоки для обработки изображения
+        for (int i = 0; i < numThreads; ++i) {
+            int startRow = i * rowsPerThread + 1;
+            int endRow = (i == numThreads - 1) ? image.height - 1 : (i + 1) * rowsPerThread;
+            threads.emplace_back(applySobelFilter, cref(image), ref(result), startRow, endRow);
+        }
+        
+        // Дожидаемся завершения всех потоков
+        for (auto& thread : threads) {
+            thread.join();
+        }
+    }
+    
+    auto stop = high_resolution_clock::now(); // Останавливаем таймер
+    auto duration = duration_cast<microseconds>(stop - start); // Вычисляем время выполнения
+    
+    cout << "Time taken: " << duration.count() << " microseconds" << endl;
     
     // Сохраняем изображение с примененным фильтром Собеля
     string outputFilename = filename.substr(0, filename.find_last_of('.')) + "_sobel.ppm";
-    savePPM(image, outputFilename);
+    savePPM(result, outputFilename);
     
     return 0;
 }
